@@ -12,10 +12,21 @@ public class HotReloader extends Thread {
     static Logger logger;
     static MinecraftClient minecraft_client;
     static Path resource_packs_path;
+	static PathMatcher reject_non_packs;
+	static long recent_ping;
 
     public void run() {
         logger.info("Watching for changes in {}", resource_packs_path);
         var default_fs = FileSystems.getDefault();
+		// Some mods like respackopts generate files (resource.zip.rpo) in the
+		// resource dir on reloading packs. Be conservative on what files we
+		// trigger on.
+		reject_non_packs = FileSystems.getDefault().getPathMatcher("glob:*.zip");
+
+		// Track the latest reload time to avoid double events on (open,
+		// modify), for systems that trigger these as unique separate
+		// ENTRY_MODIFY
+		recent_ping = System.currentTimeMillis();
 
         try (var watch_service = default_fs.newWatchService()) {
             // watch the resourcepacks folder for changes
@@ -47,15 +58,31 @@ public class HotReloader extends Thread {
         try {
             // a "key" represents a registered directory
             var watch_key = watch_service.take();
+			// whether or not we will reload packs with this file event
+			var reload = false;
+
             // handle file events that occur in one of our registered directories
             for (WatchEvent<?> event : watch_key.pollEvents()) {
                 handleFileEvent(watch_service, watch_key, event);
+
+				Boolean is_resource_pack = reject_non_packs.matches( ((WatchEvent<Path>) event).context() );
+				if ( is_resource_pack )
+					reload = true;
+
             }
 
             // let the watch service know that we're done handling events for this directory
             watch_key.reset();
 
-            minecraft_client.reloadResources();
+			// Test if we just got here, is recent_ping within a seconds of the previous.
+			if ( ( System.currentTimeMillis() - recent_ping ) < 1500 ) {
+				reload = false;
+			}
+			recent_ping = System.currentTimeMillis();
+
+			if ( reload ) {
+				minecraft_client.reloadResources();
+			}
 
         } catch (InterruptedException e) {
             logger.error("Got interrupted while trying to wait for file changes");
