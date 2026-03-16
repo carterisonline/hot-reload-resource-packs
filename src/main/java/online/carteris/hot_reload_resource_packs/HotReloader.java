@@ -47,6 +47,12 @@ public class HotReloader extends Thread {
         try {
             // a "key" represents a registered directory
             var watch_key = watch_service.take();
+
+            // text editors may use asynchronous I/O, and often update the metadata and content of a file separately.
+            // to prevent multiple reloads triggering from a single update, we sleep for 50ms.
+            // the JRE continues to collect events during sleep, so this just acts as a debounce
+            Thread.sleep(50);
+
             // handle file events that occur in one of our registered directories
             for (WatchEvent<?> event : watch_key.pollEvents()) {
                 handleFileEvent(watch_service, watch_key, event);
